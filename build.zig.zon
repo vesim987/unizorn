@@ -1,0 +1,18 @@
+.{
+    .name = "unizorn",
+    .version = "2.0.1",
+    .dependencies = .{
+        .unicorn = .{
+            .path = "../unicorn",
+            // .url = "https://github.com/unicorn-engine/unicorn/archive/2.0.1.tar.gz",
+            // .hash = "1220118cb186e38bc13ebb4288dd05d28ffbb4276d8548cbc5aa5121f6ec7c216a86",
+            .lazy = true,
+        },
+        .@"unicorn-fork" = .{
+            .url = "https://github.com/vesim987/unicorn/archive/68fb6c42792c3f7f4be7f31974ec44b36f2dbb7c.tar.gz",
+            .hash = "12203b4e67f166050e3ae4066298c0abb7a11caadae01e452d87c054a3039ab835f1",
+            .lazy = true,
+        },
+    },
+    .paths = .{""},
+}
