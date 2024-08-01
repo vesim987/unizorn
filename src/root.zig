@@ -2365,6 +2365,20 @@ pub const Unicorn = struct {
         try zig_error_from_uc_err(c.uc_emu_stop(self.uc));
     }
 
+    pub const MemType = enum(c_int) {
+        Read = c.UC_MEM_READ, // Memory is read from
+        Write = c.UC_MEM_WRITE, // Memory is written to
+        Fetch = c.UC_MEM_FETCH, // Memory is fetched
+        ReadUnmapped = c.UC_MEM_READ_UNMAPPED, // Unmapped memory is read from
+        WriteUnmapped = c.UC_MEM_WRITE_UNMAPPED, // Unmapped memory is written to
+        FetchUnmapped = c.UC_MEM_FETCH_UNMAPPED, // Unmapped memory is fetched
+        WriteProt = c.UC_MEM_WRITE_PROT, // Write to write protected, but mapped, memory
+        ReadProt = c.UC_MEM_READ_PROT, // Read from read protected, but mapped, memory
+        FetchProt = c.UC_MEM_FETCH_PROT, // Fetch from non-executable, but mapped, memory
+        ReadAfter = c.UC_MEM_READ_AFTER, // Memory is read from (successful access)
+
+    };
+
     pub const HookType = enum(c_int) {
         Intr = c.UC_HOOK_INTR,
         Insn = c.UC_HOOK_INSN,
@@ -2390,6 +2404,7 @@ pub const Unicorn = struct {
                 .Intr => *const fn (Unicorn, u32, UserdataType) void,
                 .Code => *const fn (Unicorn, u64, u32, UserdataType) void,
                 .InsnInvalid => *const fn (Unicorn, UserdataType) void,
+                .ReadUnmapped, .WriteUnmapped, .FetchUnmapped => *const fn (Unicorn, MemType, u64, u32, i64, UserdataType) bool,
                 else => @compileError("TODO"),
             };
         }
@@ -2408,6 +2423,10 @@ pub const Unicorn = struct {
                 fn InsnInvalid(uc: ?*c.uc_engine, ud: ?*anyopaque) callconv(.C) void {
                     callback(Unicorn{ .uc = uc.? }, @ptrCast(@alignCast(ud)));
                 }
+                fn ReadUnmapped(uc: ?*c.uc_engine, _type: c.uc_mem_type, addr: u64, size: c_int, value: i64, ud: ?*anyopaque) bool {
+                    return callback(Unicorn{ .uc = uc.? }, @enumFromInt(_type), addr, @intCast(size), value, @ptrCast(@alignCast(ud)));
+                }
+                const WriteUnmapped = ReadUnmapped;
             };
 
             return @ptrCast(&@field(wrappers, @tagName(self)));

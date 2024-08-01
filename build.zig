@@ -1,24 +1,5 @@
 const std = @import("std");
 
-const Target = enum {
-    x86_64,
-    arm,
-    aarch64,
-    riscv32,
-    riscv64,
-    mips,
-    mipsel,
-    mips64,
-    mips64el,
-    sparc,
-    sparc64,
-    m68k,
-    ppc,
-    // ppc64,
-    s390x,
-    tricore,
-};
-
 pub fn build(b: *std.Build) !void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
@@ -33,6 +14,7 @@ pub fn build(b: *std.Build) !void {
         mod.linkSystemLibrary("unicorn", .{});
         mod.linkSystemLibrary("c", .{});
     } else {
+        const tracer = b.option(bool, "tracer", "Eanble unicorn tracer") orelse false;
         const unicorn_targets = b.option([]Target, "unicorn_targets", "List of supported unicorn targets") orelse &[_]Target{
             .x86_64,
             .arm,
@@ -47,12 +29,12 @@ pub fn build(b: *std.Build) !void {
             .sparc64,
             .m68k,
             .ppc,
-            // ppc64,
+            .ppc64,
             .s390x,
             .tricore,
         };
-        const unicorn = try buildUnicorn(b, target, optimize, unicorn_targets);
-        mod.linkLibrary(unicorn);
+        if (try buildUnicorn(b, target, optimize, unicorn_targets, tracer)) |unicorn|
+            mod.linkLibrary(unicorn);
     }
 
     const unizorn_test = b.addTest(.{
@@ -74,10 +56,11 @@ fn buildUnicorn(
     target: std.Build.ResolvedTarget,
     optimize: std.builtin.OptimizeMode,
     unicorn_targets: []const Target,
-) !*std.Build.Step.Compile {
-    // windows neet little patch to use win32 api on mingw
+    tracer: bool,
+) !?*std.Build.Step.Compile {
+    // windows neet little patch to use win32 threading api on mingw
     const dep_name = if (target.result.os.tag == .windows) "unicorn-fork" else "unicorn";
-    const unicorn = b.lazyDependency(dep_name, .{}) orelse return error.FetchNeeded;
+    const unicorn = b.lazyDependency(dep_name, .{}) orelse return null;
 
     const unicorn_common = b.addStaticLibrary(.{
         .name = "unicorn-common",
@@ -92,11 +75,10 @@ fn buildUnicorn(
     unicorn_common.addIncludePath(unicorn.path("qemu/include/qemu"));
     unicorn_common.addIncludePath(unicorn.path("include"));
     unicorn_common.addIncludePath(unicorn.path("qemu/tcg"));
-    const flags =
-        &.{
-        // "-D_WIN32",
-        // "-DUNICORN_TRACER",
-    };
+    const flags: []const []const u8 = if (tracer)
+        &.{"-DUNICORN_TRACER"}
+    else
+        &.{};
 
     unicorn_common.addCSourceFiles(.{
         .root = unicorn.path(""),
@@ -241,22 +223,28 @@ fn buildUnicorn(
         .optimize = .ReleaseFast,
     });
 
-    const lib_flags = &.{
-        "-DUNICORN_HAS_X86",
-        "-DUNICORN_HAS_ARM",
-        "-DUNICORN_HAS_AARCH64",
-        "-DUNICORN_HAS_RISCV",
-        "-DUNICORN_HAS_MIPS",
-        "-DUNICORN_HAS_MIPSEL",
-        "-DUNICORN_HAS_MIPS64",
-        "-DUNICORN_HAS_MIPS64EL",
-        "-DUNICORN_HAS_SPARC",
-        "-DUNICORN_HAS_M64K",
-        // "-DUNICORN_HAS_PPC",
-        "-DUNICORN_HAS_S390",
-        "-DUNICORN_HAS_TRICORE",
-        // "-D_WIN32",
-    };
+    var lib_flags = std.StringArrayHashMap(void).init(b.allocator);
+
+    for (unicorn_targets) |t| {
+        try lib_flags.put(switch (t) {
+            .x86_64 => "-DUNICORN_HAS_X86",
+            .arm => "-DUNICORN_HAS_ARM",
+            .aarch64 => "-DUNICORN_HAS_AARCH64",
+            .riscv32 => "-DUNICORN_HAS_RISCV",
+            .riscv64 => "-DUNICORN_HAS_RISCV",
+            .mips => "-DUNICORN_HAS_MIPS",
+            .mipsel => "-DUNICORN_HAS_MIPSEL",
+            .mips64 => "-DUNICORN_HAS_MIPS64",
+            .mips64el => "-DUNICORN_HAS_MIPS64EL",
+            .sparc => "-DUNICORN_HAS_SPARC",
+            .sparc64 => "-DUNICORN_HAS_SPARC",
+            .m68k => "-DUNICORN_HAS_M64K",
+            .ppc => "-DUNICORN_HAS_PPC",
+            .ppc64 => "-DUNICORN_HAS_PPC",
+            .s390x => "-DUNICORN_HAS_S390",
+            .tricore => "-DUNICORN_HAS_TRICORE",
+        }, {});
+    }
 
     lib.addCSourceFiles(.{
         .root = unicorn.path(""),
@@ -265,7 +253,7 @@ fn buildUnicorn(
             "qemu/softmmu/vl.c",
             "qemu/hw/core/cpu.c",
         },
-        .flags = lib_flags,
+        .flags = lib_flags.keys(),
     });
 
     switch (target.result.os.tag) {
@@ -276,7 +264,7 @@ fn buildUnicorn(
                     "qemu/util/oslib-posix.c",
                     "qemu/util/qemu-thread-posix.c",
                 },
-                .flags = lib_flags,
+                .flags = lib_flags.keys(),
             });
         },
         .windows => {
@@ -286,7 +274,7 @@ fn buildUnicorn(
                     "qemu/util/oslib-win32.c",
                     "qemu/util/qemu-thread-win32.c",
                 },
-                .flags = lib_flags,
+                .flags = lib_flags.keys(),
             });
             // lib.addAssemblyFile(unicorn.path("qemu/util/setjmp-wrapper-win32.asm"));
         },
@@ -309,6 +297,25 @@ fn buildUnicorn(
 
     return lib;
 }
+
+const Target = enum {
+    x86_64,
+    arm,
+    aarch64,
+    riscv32,
+    riscv64,
+    mips,
+    mipsel,
+    mips64,
+    mips64el,
+    sparc,
+    sparc64,
+    m68k,
+    ppc,
+    ppc64,
+    s390x,
+    tricore,
+};
 
 fn createTarget(
     b: *std.Build,
@@ -696,49 +703,49 @@ fn createTarget(
                 .flags = softmmu_flags.items,
             });
         },
-        // .ppc64 => |r| {
-        //     config_target.addValues(.{
-        //         .TARGET_PPC = 1,
-        //         .TARGET_NAME = @tagName(r),
-        //         .CONFIG_SOFTMMU = 1,
-        //         .TARGET_WORDS_BIGENDIAN = 1,
-        //         .TARGET_PPC64 = 1,
-        //     });
-        //     softmmu.addIncludePath(unicorn.path("qemu/target/ppc"));
-        //     softmmu.addCSourceFiles(.{
-        //         .root = unicorn.path(""),
-        //         .files = &.{
-        //             "qemu/hw/ppc/ppc.c",
-        //             "qemu/hw/ppc/ppc_booke.c",
+        .ppc64 => |r| {
+            config_target.addValues(.{
+                .TARGET_PPC = 1,
+                .TARGET_NAME = @tagName(r),
+                .CONFIG_SOFTMMU = 1,
+                .TARGET_WORDS_BIGENDIAN = 1,
+                .TARGET_PPC64 = 1,
+            });
+            softmmu.addIncludePath(unicorn.path("qemu/target/ppc"));
+            softmmu.addCSourceFiles(.{
+                .root = unicorn.path(""),
+                .files = &.{
+                    "qemu/hw/ppc/ppc.c",
+                    "qemu/hw/ppc/ppc_booke.c",
 
-        //             "qemu/libdecnumber/decContext.c",
-        //             "qemu/libdecnumber/decNumber.c",
-        //             "qemu/libdecnumber/dpd/decimal128.c",
-        //             "qemu/libdecnumber/dpd/decimal32.c",
-        //             "qemu/libdecnumber/dpd/decimal64.c",
+                    "qemu/libdecnumber/decContext.c",
+                    "qemu/libdecnumber/decNumber.c",
+                    "qemu/libdecnumber/dpd/decimal128.c",
+                    "qemu/libdecnumber/dpd/decimal32.c",
+                    "qemu/libdecnumber/dpd/decimal64.c",
 
-        //             "qemu/target/ppc/compat.c",
-        //             "qemu/target/ppc/cpu.c",
-        //             "qemu/target/ppc/cpu-models.c",
-        //             "qemu/target/ppc/dfp_helper.c",
-        //             "qemu/target/ppc/excp_helper.c",
-        //             "qemu/target/ppc/fpu_helper.c",
-        //             "qemu/target/ppc/int_helper.c",
-        //             "qemu/target/ppc/machine.c",
-        //             "qemu/target/ppc/mem_helper.c",
-        //             "qemu/target/ppc/misc_helper.c",
-        //             "qemu/target/ppc/mmu-book3s-v3.c",
-        //             "qemu/target/ppc/mmu-hash32.c",
-        //             "qemu/target/ppc/mmu-hash64.c",
-        //             "qemu/target/ppc/mmu_helper.c",
-        //             "qemu/target/ppc/mmu-radix64.c",
-        //             "qemu/target/ppc/timebase_helper.c",
-        //             "qemu/target/ppc/translate.c",
-        //             "qemu/target/ppc/unicorn.c",
-        //         },
-        //         .flags = softmmu_flags.items,
-        //     });
-        // },
+                    "qemu/target/ppc/compat.c",
+                    "qemu/target/ppc/cpu.c",
+                    "qemu/target/ppc/cpu-models.c",
+                    "qemu/target/ppc/dfp_helper.c",
+                    "qemu/target/ppc/excp_helper.c",
+                    "qemu/target/ppc/fpu_helper.c",
+                    "qemu/target/ppc/int_helper.c",
+                    "qemu/target/ppc/machine.c",
+                    "qemu/target/ppc/mem_helper.c",
+                    "qemu/target/ppc/misc_helper.c",
+                    "qemu/target/ppc/mmu-book3s-v3.c",
+                    "qemu/target/ppc/mmu-hash32.c",
+                    "qemu/target/ppc/mmu-hash64.c",
+                    "qemu/target/ppc/mmu_helper.c",
+                    "qemu/target/ppc/mmu-radix64.c",
+                    "qemu/target/ppc/timebase_helper.c",
+                    "qemu/target/ppc/translate.c",
+                    "qemu/target/ppc/unicorn.c",
+                },
+                .flags = softmmu_flags.items,
+            });
+        },
         .s390x => |r| {
             config_target.addValues(.{
                 .TARGET_S390x = 1,
